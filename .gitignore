@@ -1,0 +1,22 @@
+dist/
+artifacts/*.png
+artifacts/*.json
+node_modules/
+*.log
+
+# Local credentials and editor state
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+.DS_Store
+Thumbs.db
+
+# Keep only the current platform delivery, not historical packages or QA captures
+release/*
+!release/office-slack-game-xhs-v0.2.6.zip
+assets/*.wav
+promo-v0.2.6/*.zip
+__pycache__/
+*.pyc
