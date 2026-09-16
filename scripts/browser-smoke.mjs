@@ -1,0 +1,64 @@
+// 可选浏览器验收；PLAYWRIGHT_MODULE 指向外置 playwright 的 index.mjs，不是运行依赖。
+import {mkdir,writeFile} from 'node:fs/promises';
+import assert from 'node:assert/strict';
+import {pathToFileURL} from 'node:url';
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE?pathToFileURL(process.env.PLAYWRIGHT_MODULE).href:'playwright');
+const browser=await chromium.launch({channel:process.env.BROWSER_CHANNEL||'msedge',headless:true});
+const context=await browser.newContext({viewport:{width:844,height:390},deviceScaleFactor:1,reducedMotion:'reduce'});
+const page=await context.newPage(),errors=[],checks=[];
+page.on('pageerror',e=>errors.push(e.message));
+const origin=process.env.GAME_URL||'http://localhost:4173';
+await mkdir('artifacts',{recursive:true});
+try{
+ await page.goto(origin+'/?debug=1');
+ await page.getByRole('button',{name:'打卡上班 →',exact:true}).click();
+ await page.getByRole('button',{name:'确认重点，开始上班 →',exact:true}).click();
+ await page.getByRole('button',{name:'认识一下工位',exact:true}).click();
+ await page.getByRole('button',{name:'努力工作',exact:true}).last().click();
+ await page.waitForTimeout(700);
+ assert.equal(await page.evaluate(()=>window.officeDebug.getState().action),'WORK');
+ await page.getByRole('button',{name:'暂停游戏'}).click();
+ const elapsed=await page.evaluate(()=>window.officeDebug.getState().elapsedMs);
+ await page.waitForTimeout(300);
+ assert.equal(await page.evaluate(()=>window.officeDebug.getState().elapsedMs),elapsed);
+ await page.reload();
+ await page.getByRole('button',{name:/继续 · 第 1 天/}).click();
+ assert.equal(await page.evaluate(()=>window.officeDebug.getState().elapsedMs),elapsed);
+ await page.getByRole('button',{name:'继续上班 →'}).click();
+ checks.push('正式新局、教学入口、暂停与刷新继续');
+ await page.evaluate(()=>window.officeDebug.snapshot('safe'));
+ await page.screenshot({path:'artifacts/game-844x390.png',fullPage:true});
+ await page.getByRole('button',{name:'评估目标 ↗'}).click();
+ assert.equal(await page.getByRole('heading',{name:'成长，也要被看见。'}).count(),1);
+ await page.getByRole('button',{name:'回到工位'}).click();
+ checks.push('评估目标弹窗与恢复');
+ await page.evaluate(()=>window.officeDebug.snapshot('caught'));
+ await page.evaluate(()=>window.officeDebug.advance(20));
+ assert.equal(await page.evaluate(()=>window.officeDebug.getState().caughtCount),1);
+ await page.screenshot({path:'artifacts/caught-844x390.png',fullPage:true});
+ checks.push('手机被抓场景');
+ await page.evaluate(()=>window.officeDebug.snapshot('promotion'));
+ await page.getByRole('button',{name:'查看职级评估 →'}).click();
+ assert.match(await page.locator('#modal-content').innerText(),/晋升为熟练员工/);
+ await page.screenshot({path:'artifacts/promotion-844x390.png',fullPage:true});
+ await page.getByRole('button',{name:'下一天 →',exact:true}).click();
+ assert.equal(await page.evaluate(()=>window.officeDebug.getState().day),4);
+ checks.push('日末结算、评估和下一天');
+ await page.evaluate(()=>window.officeDebug.snapshot('balance'));
+ await page.getByRole('button',{name:'看看我的结局 →'}).click();
+ assert.match(await page.locator('#modal-content').innerText(),/演示数据/);
+ assert.equal(await page.evaluate(()=>window.officeDebug.getProfile().history.length),0);
+ await page.screenshot({path:'artifacts/result-844x390.png',fullPage:true});
+ checks.push('结局与演示记录隔离');
+ for(const size of [{width:640,height:360},{width:844,height:390},{width:1280,height:720},{width:1440,height:900}]){
+  await page.setViewportSize(size);await page.evaluate(()=>window.officeDebug.snapshot('safe'));
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,`horizontal overflow ${size.width}`);
+  const pauseButton=page.getByRole('button',{name:'暂停游戏'});await pauseButton.click();
+  const dlg=await page.locator('dialog').boundingBox();assert.ok(dlg.width<=size.width&&dlg.height<=size.height);
+  await page.screenshot({path:`artifacts/layout-${size.width}.png`,fullPage:true});
+  checks.push(`响应式 ${size.width}×${size.height} 无横向溢出，弹窗不超视口`);
+ }
+ assert.deepEqual(errors,[]);
+ await writeFile('artifacts/browser-report.json',JSON.stringify({date:new Date().toISOString(),browser:await browser.version(),checks,errors},null,2));
+ console.log(JSON.stringify({checks,errors},null,2));
+}finally{await browser.close();}
